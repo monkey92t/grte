@@ -1,0 +1,4 @@
+# go-redis-text-env => grte
+
+MinVersionNumber: 100
+Image: goredis/test-env:v8.11.2

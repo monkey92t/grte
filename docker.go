@@ -3,9 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
-	"golang.org/x/term"
-	"gopkg.in/yaml.v2"
 	"io"
 	"os"
 	"path/filepath"
@@ -17,22 +16,26 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
 	actContainer "github.com/nektos/act/pkg/container"
+	"golang.org/x/term"
+	"gopkg.in/yaml.v2"
 )
 
 const (
 	Version       = "v1.0.0"
 	VersionNumber = 100
 
-	defaultImage  = "goredis/grte:latest"
-	textEnvFile   = "grte.yaml"
-	containerName = "go-redis-test"
+	defaultImage    = "goredis/grte:latest"
+	textEnvFile     = "grte.yaml"
+	containerName   = "go-redis-test-env"
+	containerGOPATH = "/go"
 )
 
 var ctx = context.Background()
 
 type Env struct {
-	Image            string `yaml:"Image"`
-	MinVersionNumber int    `yaml:"MinVersionNumber"`
+	Image            string            `yaml:"Image"`
+	MinVersionNumber int               `yaml:"MinVersionNumber"`
+	ContainerEnv     map[string]string `yaml:"ContainerEnv"`
 
 	Cmd     []string
 	WorkDir string
@@ -41,6 +44,10 @@ type Env struct {
 }
 
 var env Env
+
+func init() {
+	flag.Parse()
+}
 
 func before() error {
 	var err error
@@ -84,6 +91,7 @@ func main() {
 		switch strings.ToLower(strings.TrimLeft(os.Args[1], "-")) {
 		case "version", "v":
 			logf("%s -- %s", filepath.Base(os.Args[0]), Version)
+			return
 		case "help", "h":
 			logf("Usage: %s [OPTION | COMMAND]", cmd)
 			logf("Option:")
@@ -92,8 +100,10 @@ func main() {
 			logf("COMMAND: command to be execute")
 			logf("    %s go test ./...", cmd)
 			logf("    %s golangci-lint run", cmd)
+			return
+		default:
+			os.Args = append(os.Args[1:], strings.Split(os.Args[1], " ")...)
 		}
-		return
 	}
 
 	if err := before(); err != nil {
@@ -137,16 +147,32 @@ func exec() error {
 
 func runContainer(cli *client.Client) error {
 	iconLogln(dockerIcon, "Create Docker Container")
+
+	containerEnv := make([]string, 0, len(env.ContainerEnv))
+	for k, v := range env.ContainerEnv {
+		containerEnv = append(containerEnv, fmt.Sprintf("%s=%s", k, v))
+	}
 	config := &container.Config{
 		Image:      env.Image,
+		Env:        containerEnv,
 		WorkingDir: env.WorkDir,
 		Tty:        env.IsTry,
+	}
+
+	gopath := os.Getenv("GOPATH")
+	if gopath == "" {
+		gopath = os.TempDir()
 	}
 	mounts := []mount.Mount{
 		{
 			Type:   mount.TypeBind,
 			Source: env.RootDir,
 			Target: env.RootDir,
+		},
+		{
+			Type:   mount.TypeBind,
+			Source: gopath,
+			Target: containerGOPATH,
 		},
 	}
 	hostConfig := &container.HostConfig{
@@ -158,6 +184,8 @@ func runContainer(cli *client.Client) error {
 	if err != nil {
 		return err
 	}
+	defer removeContainer(cli)
+
 	for _, warn := range create.Warnings {
 		iconLogln(dockerIcon, warn)
 	}
@@ -165,12 +193,15 @@ func runContainer(cli *client.Client) error {
 		return err
 	}
 	iconLogln(dockerIcon, create.ID)
+	iconLogf(dockerIcon, "Exec command: %s", env.Cmd)
 
-	defer removeContainer(cli)
-
-	iconLogf(dockerIcon, "exec command %s", env.Cmd)
+	cmd := fmt.Sprintf("cp -r /redis %s && %s && rm -rf %s",
+		filepath.Join(env.RootDir, "testdata"),
+		strings.Join(env.Cmd, " "),
+		filepath.Join(env.RootDir, "testdata/redis"),
+	)
 	idResp, err := cli.ContainerExecCreate(ctx, create.ID, types.ExecConfig{
-		Cmd:          env.Cmd,
+		Cmd:          []string{"sh", "-c", cmd},
 		WorkingDir:   env.WorkDir,
 		Tty:          env.IsTry,
 		AttachStderr: true,

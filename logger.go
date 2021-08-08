@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"sync"
 )
 
 const (
@@ -19,7 +18,6 @@ const (
 )
 
 type logger struct {
-	sync.Mutex
 	out io.Writer
 }
 

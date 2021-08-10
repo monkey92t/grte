@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -10,12 +12,12 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/docker/cli/cli/connhelper"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
-	actContainer "github.com/nektos/act/pkg/container"
 	"golang.org/x/term"
 	"gopkg.in/yaml.v2"
 )
@@ -26,7 +28,7 @@ const (
 
 	defaultImage    = "goredis/grte:latest"
 	textEnvFile     = "grte.yaml"
-	containerName   = "go-redis-test-env"
+	containerName   = "grte"
 	containerGOPATH = "/go"
 )
 
@@ -70,9 +72,21 @@ func before() error {
 		if err = yaml.Unmarshal(envBuff, &env); err != nil {
 			return err
 		}
-		if VersionNumber < env.MinVersionNumber {
-			return errors.New("the tool version is too low, please upgrade the version")
+	}
+
+	// read ~/.grte.yaml
+	home, err := os.UserHomeDir()
+	if err == nil && fileIsExist(filepath.Join(home, "."+textEnvFile)) {
+		homeEnvBuff, err := os.ReadFile(filepath.Join(home, "."+textEnvFile))
+		if err != nil {
+			return err
 		}
+		if err = yaml.Unmarshal(homeEnvBuff, &env); err != nil {
+			return err
+		}
+	}
+	if VersionNumber < env.MinVersionNumber {
+		return errors.New("the tool version is too low, please upgrade the version")
 	}
 
 	if env.Image == "" {
@@ -108,15 +122,19 @@ func main() {
 
 	if err := before(); err != nil {
 		iconLogln(errorIcon, err)
+		return
 	}
 
 	if err := exec(); err != nil {
 		iconLogln(errorIcon, err)
+		return
 	}
+
+	iconLogln(successIcon, "Success!")
 }
 
 func exec() error {
-	cli, err := actContainer.GetDockerClient(ctx)
+	cli, err := GetDockerClient(ctx)
 	if err != nil {
 		return err
 	}
@@ -146,7 +164,7 @@ func exec() error {
 }
 
 func runContainer(cli *client.Client) error {
-	iconLogln(dockerIcon, "Create Docker Container")
+	iconLogln(dockerIcon, "Create docker container...")
 
 	containerEnv := make([]string, 0, len(env.ContainerEnv))
 	for k, v := range env.ContainerEnv {
@@ -159,9 +177,9 @@ func runContainer(cli *client.Client) error {
 		Tty:        env.IsTry,
 	}
 
-	gopath := os.Getenv("GOPATH")
-	if gopath == "" {
-		gopath = os.TempDir()
+	localCacheGoPath := filepath.Join(os.TempDir(), "go-redis-test-env-gopath")
+	if !fileIsExist(localCacheGoPath) {
+		_ = os.Mkdir(localCacheGoPath, 0777)
 	}
 	mounts := []mount.Mount{
 		{
@@ -171,11 +189,12 @@ func runContainer(cli *client.Client) error {
 		},
 		{
 			Type:   mount.TypeBind,
-			Source: gopath,
+			Source: localCacheGoPath,
 			Target: containerGOPATH,
 		},
 	}
 	hostConfig := &container.HostConfig{
+		Privileged:  true,
 		Mounts:      mounts,
 		NetworkMode: "host",
 	}
@@ -192,8 +211,10 @@ func runContainer(cli *client.Client) error {
 	if err := cli.ContainerStart(ctx, create.ID, types.ContainerStartOptions{}); err != nil {
 		return err
 	}
-	iconLogln(dockerIcon, create.ID)
-	iconLogf(dockerIcon, "Exec command: %s", env.Cmd)
+
+	iconLogf(dockerIcon, "ContainerID: %s", create.ID)
+	iconLogf(dockerIcon, "WorkDir: %s", env.WorkDir)
+	iconLogf(dockerIcon, "Command: %s", env.Cmd)
 
 	cmd := fmt.Sprintf("cp -r /redis %s && %s && rm -rf %s",
 		filepath.Join(env.RootDir, "testdata"),
@@ -201,6 +222,7 @@ func runContainer(cli *client.Client) error {
 		filepath.Join(env.RootDir, "testdata/redis"),
 	)
 	idResp, err := cli.ContainerExecCreate(ctx, create.ID, types.ExecConfig{
+		User:         "grte",
 		Cmd:          []string{"sh", "-c", cmd},
 		WorkingDir:   env.WorkDir,
 		Tty:          env.IsTry,
@@ -239,6 +261,36 @@ func runContainer(cli *client.Client) error {
 
 	return fmt.Errorf("exit with `FAILURE`: %v", inspectResp.ExitCode)
 }
+
+// GetDockerClient get the docker client, if it is not installed, return an error.
+func GetDockerClient(ctx context.Context) (*client.Client, error) {
+	var err error
+	var cli *client.Client
+
+	dockerHost := os.Getenv("DOCKER_HOST")
+	if strings.HasPrefix(dockerHost, "ssh://") {
+		var helper *connhelper.ConnectionHelper
+
+		helper, err = connhelper.GetConnectionHelper(dockerHost)
+		if err != nil {
+			return nil, err
+		}
+		cli, err = client.NewClientWithOpts(
+			client.WithHost(helper.Host),
+			client.WithDialContext(helper.Dialer),
+		)
+	} else {
+		cli, err = client.NewClientWithOpts(client.FromEnv)
+	}
+	if err != nil {
+		return nil, err
+	}
+	cli.NegotiateAPIVersion(ctx)
+
+	return cli, err
+}
+
+// ---------------------------------------
 
 var rootErr = errors.New("need to execute commands in the go-redis directory")
 
@@ -285,4 +337,152 @@ removed:
 			}
 		}
 	}
+}
+
+// ------------------------------------
+
+const (
+	noneIcon    = ""
+	errorIcon   = " \u274C  "
+	successIcon = " \u2705  "
+	dockerIcon  = " \U0001F433 "
+)
+
+type logger struct {
+	out io.Writer
+}
+
+func (l *logger) Print(v ...interface{})   { _, _ = l.out.Write([]byte(fmt.Sprint(v...))) }
+func (l *logger) Println(v ...interface{}) { _, _ = l.out.Write([]byte(fmt.Sprintln(v...))) }
+func (l *logger) Printf(format string, v ...interface{}) {
+	_, _ = l.out.Write([]byte(fmt.Sprintf(format, v...)))
+}
+
+var log = logger{out: os.Stdout}
+
+// dockerMessages is the json data output by docker,
+// we only take the required fields and omit part of it.
+type dockerMessage struct {
+	Stream         string      `json:"stream"`
+	Status         string      `json:"status"`
+	Progress       string      `json:"progress"`
+	ProgressDetail interface{} `json:"progressDetail"`
+	ID             string      `json:"id"`
+	Error          string      `json:"error"`
+	ErrorDetail    struct {
+		Message string `json:"message"`
+	} `json:"errorDetail"`
+}
+
+func readDockerOutput(body io.ReadCloser) error {
+	if body == nil {
+		return nil
+	}
+	defer body.Close()
+
+	scanner := bufio.NewScanner(body)
+
+	var (
+		msg     dockerMessage
+		lastErr error
+	)
+	posMap := make(map[string]int)
+	next := func() {
+		for k := range posMap {
+			posMap[k]++
+		}
+	}
+	for scanner.Scan() {
+		line := scanner.Bytes()
+
+		msg.ID = ""
+		msg.Stream = ""
+		msg.Error = ""
+		msg.ErrorDetail.Message = ""
+		msg.Status = ""
+		msg.Progress = ""
+		msg.ProgressDetail = nil
+
+		if err := json.Unmarshal(line, &msg); err != nil {
+			iconLogf(errorIcon, "unable to unmarshal line [%s] ==> %v", string(line), err)
+			lastErr = err
+			next()
+			continue
+		}
+		if msg.Error != "" {
+			iconLogln(errorIcon, msg.Error)
+			lastErr = errors.New(msg.Error)
+			break
+		}
+
+		if msg.ErrorDetail.Message != "" {
+			iconLogln(errorIcon, msg.ErrorDetail.Message)
+			lastErr = errors.New(msg.Error)
+			break
+		}
+		if msg.Status != "" {
+			msg.Status = strings.TrimSpace(msg.Status)
+			if msg.Progress != "" {
+				dockerLogProgress(posMap[msg.ID], "%s :: %s :: %s", msg.Status, msg.ID, msg.Progress)
+			} else if msg.ProgressDetail != nil && msg.ID != "" {
+				if idx, ok := posMap[msg.ID]; ok {
+					dockerLogProgress(idx, "%s :: %s", msg.Status, msg.ID)
+				} else {
+					iconLogf(dockerIcon, "%s :: %s", msg.Status, msg.ID)
+					posMap[msg.ID] = 0
+					next()
+				}
+			} else if msg.ID != "" {
+				iconLogf(dockerIcon, "%s :: %s", msg.Status, msg.ID)
+				next()
+			} else {
+				iconLogln(dockerIcon, msg.Status)
+				next()
+			}
+		} else if msg.Stream != "" {
+			iconLogln(dockerIcon, msg.Stream)
+			next()
+		} else {
+			lastErr = fmt.Errorf("unable to handle line: %s", string(line))
+			iconLogln(errorIcon, lastErr)
+			next()
+		}
+	}
+	return lastErr
+}
+
+func logf(format string, args ...interface{}) {
+	log.Println(logFormat(noneIcon, format, args...))
+}
+
+func iconLogln(icon string, v ...interface{}) {
+	log.Println(logFormat(icon, fmt.Sprint(v...)))
+}
+
+func iconLogf(icon, format string, args ...interface{}) {
+	log.Println(logFormat(icon, format, args...))
+}
+
+func iconFail(icon string, v ...interface{}) {
+	log.Println(logFormat(icon, fmt.Sprint(v...)))
+	os.Exit(1)
+}
+
+func logProgress(pos int, format string, args ...interface{}) {
+	log.Printf("\033[%dA\r\033[K%s\033[%dB\r", pos, logFormat(noneIcon, format, args...), pos)
+}
+
+func dockerLogProgress(pos int, format string, args ...interface{}) {
+	log.Printf("\033[%dA\r\033[K%s\033[%dB\r", pos, logFormat(dockerIcon, format, args...), pos)
+}
+
+func logFormat(icon, format string, args ...interface{}) string {
+	var s string
+	if icon != noneIcon {
+		s = fmt.Sprintf(fmt.Sprintf("%s%s", icon, format), args...)
+	} else {
+		s = fmt.Sprintf(format, args...)
+	}
+
+	return fmt.Sprintf("\x1b[%dm[%s] \x1b[0m%s", 36, "go-redis", s)
 }

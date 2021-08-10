@@ -1,7 +1,7 @@
 # go-redis-text-env => grte
 
 MinVersionNumber: 100
-Image: goredis/grte:env
+Image: goredis/grte:v8.11.2
 
 ContainerEnv:
   GOPROXY: https://goproxy.io

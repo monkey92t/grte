@@ -8,7 +8,7 @@ It is only compatible with the latest version of go-redis master branch.
 
 1. First you need to [install a Docker](https://docs.docker.com/get-docker).  
 
-2. You can use the simplest installation method.  
+2. You can use the easiest way to install grte.  
 ```
 > git clone https://github.com/monkey92t/grte.git
 > cd grte
@@ -61,7 +61,7 @@ WARN [runner] The linter 'golint' is deprecated (since v1.41.0) due to: The repo
 
 Its working directory depends on where you are currently in `go-redis/redis`:  
 ```
-monkey@MonkeydeiMac pool % pwd
+monkey@iMac pool % pwd
 /Users/monkey/redis/internal/pool
 monkey92t@iMac pool % grte go test ./...
 [go-redis]  🐳 Prepare docker image ==> goredis/grte:env
@@ -72,7 +72,7 @@ monkey92t@iMac pool % grte go test ./...
 [go-redis]  🐳 Command: [go test ./...]
 ok      github.com/go-redis/redis/v8/internal/pool      0.953s
 [go-redis]  ✅  Success!
-monkey@MonkeydeiMac pool % 
+monkey@iMac pool % 
 
 ```
 

@@ -3,7 +3,7 @@ FROM ubuntu:20.04
 ARG GolangciVersion=v1.41.1
 ARG RedisVersion=6.2.5
 
-ENV GOLANG_VERSION 1.16.7
+ENV GOLANG_VERSION 1.17.8
 ENV GOPATH /go
 ENV PATH /usr/local/go/bin:$GOPATH/bin:$PATH
 
@@ -21,7 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN set -eux; \
     # install golang \
-    wget -qO- https://dl.google.com/go/go1.16.7.linux-amd64.tar.gz | tar xvz --strip-components=1 -C /usr/local; \
+    wget -qO- https://dl.google.com/go/go1.17.8.linux-amd64.tar.gz | tar xvz --strip-components=1 -C /usr/local; \
     mkdir -p "$GOPATH/src" "$GOPATH/bin" && chmod -R 777 "$GOPATH"; \
     \
     # install golangci-lint

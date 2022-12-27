@@ -1,7 +1,7 @@
 FROM ubuntu:latest
 
 ARG GolangciVersion=v1.50.1
-ARG RedisVersion=7.0.6
+ARG RedisVersion=7.0.7
 
 ENV GOLANG_VERSION 1.19.4
 ENV GOPATH /go

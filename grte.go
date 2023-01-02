@@ -32,8 +32,6 @@ const (
 	containerGOPATH = "/go"
 )
 
-var ctx = context.Background()
-
 type Env struct {
 	Image            string            `yaml:"Image"`
 	MinVersionNumber int               `yaml:"MinVersionNumber"`
@@ -46,6 +44,11 @@ type Env struct {
 }
 
 var env Env
+
+var (
+	localCacheGoPath = filepath.Join(os.TempDir(), "go-redis-test-env-gopath")
+	ctx              = context.Background()
+)
 
 func init() {
 	flag.Parse()
@@ -115,6 +118,13 @@ func main() {
 			logf("    %s go test ./...", cmd)
 			logf("    %s golangci-lint run", cmd)
 			return
+		case "clear":
+			if err := os.RemoveAll(localCacheGoPath); err != nil {
+				logf("clear error: %s", err.Error())
+				return
+			}
+			logf("clear success!")
+			return
 		default:
 			os.Args = append(os.Args[1:], strings.Split(os.Args[1], " ")...)
 		}
@@ -177,7 +187,6 @@ func runContainer(cli *client.Client) error {
 		Tty:        env.IsTry,
 	}
 
-	localCacheGoPath := filepath.Join(os.TempDir(), "go-redis-test-env-gopath")
 	if !fileIsExist(localCacheGoPath) {
 		_ = os.Mkdir(localCacheGoPath, 0777)
 	}

@@ -1,9 +1,9 @@
 FROM ubuntu:latest
 
 ARG GolangciVersion=v1.50.1
-ARG RedisVersion=7.0.7
+ARG RedisVersion=7.0.9
 
-ENV GOLANG_VERSION 1.19.5
+ENV GOLANG_VERSION 1.20.2
 ENV GOPATH /go
 ENV PATH /usr/local/go/bin:$GOPATH/bin:$PATH
 
@@ -21,7 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # install golang
 RUN set -eux; \
-    wget -qO- https://dl.google.com/go/go1.19.5.linux-amd64.tar.gz | tar xvz --strip-components=1 -C /usr/local; \
+    wget -qO- https://dl.google.com/go/go1.20.2.linux-amd64.tar.gz | tar xvz --strip-components=1 -C /usr/local; \
     mkdir -p "$GOPATH/src" "$GOPATH/bin" && chmod -R 777 "$GOPATH"
 
 # install golangci-lint
